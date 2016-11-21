@@ -4,9 +4,9 @@
 # Author: Alaa Hleihel <alaa@mellanox.com>
 #
 
-GIT_URL=${GIT_URL:-"https://github.com/Mellanox/nv_peer_memory.git"}
+GIT_URL=${GIT_URL:-"https://github.com/drossetti/nv_peer_memory.git"}
 
-GIT_BRANCH=${GIT_BRANCH:-"master"}
+GIT_BRANCH=${GIT_BRANCH:-"cuda8"}
 ex()
 {
     if ! eval "$@"; then
