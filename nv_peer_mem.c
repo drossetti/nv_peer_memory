@@ -356,7 +356,7 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 	}
 
 	if (nv_mem_context->sg_allocated) {
-		peer_err("error, sg allocated already");
+		peer_err("error, sg allocated already\n");
 		return -EINVAL;
 	}
 
@@ -439,6 +439,11 @@ static int nv_dma_unmap(struct sg_table *sg_head, void *context,
 
 	if (ACCESS_ONCE(nv_mem_context->is_callback))
 		goto out;
+
+	if (!nv_mem_context->sg_allocated) {
+		peer_err("error, sg is not allocated\n");
+		return -EINVAL;
+	}
 
 #if NV_DMA_MAPPING
 	if (nv_mem_context->dma_mapping) {
