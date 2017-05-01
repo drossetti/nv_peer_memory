@@ -334,6 +334,8 @@ err:
 	return 0;
 }
 
+#define dma_to_pci_dev(n) container_of(n, struct pci_dev, dev)
+
 static int nv_dma_map(struct sg_table *sg_head, void *context,
 			      struct device *dma_device, int dmasync,
 			      int *nmap)
@@ -343,6 +345,7 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 	struct nv_mem_context *nv_mem_context =
 		(struct nv_mem_context *) context;
 	struct nvidia_p2p_page_table *page_table = nv_mem_context->page_table;
+	struct pci_dev *pci_device = dma_to_pci_dev(dma_device);
 
         if (!page_table) {
             peer_err("error, invalid p2p page table\n");
@@ -360,11 +363,13 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 		return -EINVAL;
 	}
 
+	if (!pci_device) {
+		peer_err("invalid pci_device\n");
+		return -EINVAL;		
+	}
+
 #if NV_DMA_MAPPING
         {
-#define to_pci_dev(n) container_of(n, struct pci_dev, dev)
-
-                struct pci_dev *pci_device = to_pci_dev(dma_device);
                 struct nvidia_p2p_dma_mapping *dma_mapping;
 
                 ret = nv_dma_map_pages(pci_device, page_table, &dma_mapping);
@@ -432,9 +437,15 @@ static int nv_dma_unmap(struct sg_table *sg_head, void *context,
 {
 	struct nv_mem_context *nv_mem_context =
 		(struct nv_mem_context *) context;
+	struct pci_dev *pci_device = dma_to_pci_dev(dma_device);
+
 	if (!nv_mem_context) {
 		peer_err("invalid context\n");
 		return -EINVAL;
+	}
+	if (!pci_device) {
+		peer_err("invalid pci_device\n");
+		return -EINVAL;		
 	}
 
 	if (ACCESS_ONCE(nv_mem_context->is_callback))
@@ -448,7 +459,7 @@ static int nv_dma_unmap(struct sg_table *sg_head, void *context,
 #if NV_DMA_MAPPING
 	if (nv_mem_context->dma_mapping) {
 		peer_dbg("freeing dma_mapping %p\n", nv_mem_context->dma_mapping);
-		nv_free_dma_mapping(nv_mem_context->dma_mapping);
+		nv_dma_unmap_pages(pci_device, nv_mem_context->page_table, nv_mem_context->dma_mapping);
 	}
 #endif
 
