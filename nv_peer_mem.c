@@ -75,7 +75,7 @@
  *	so it is not possible to check version compatibility. In this case
  *	let us just avoid dma mappings altogether.
  */
-#if defined(NVIDIA_P2P_DMA_MAPPING_VERSION) &&	\
+#if 0 && defined(NVIDIA_P2P_DMA_MAPPING_VERSION) &&	\
 	(NVIDIA_P2P_MAJOR_VERSION(NVIDIA_P2P_DMA_MAPPING_VERSION) >= 2)
 #pragma message("Enable nvidia_p2p_dma_map_pages support")
 #define NV_DMA_MAPPING 1
