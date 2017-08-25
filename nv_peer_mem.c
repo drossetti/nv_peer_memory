@@ -241,6 +241,7 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 	struct nv_mem_context *nv_mem_context =
 		(struct nv_mem_context *) context;
 	struct nvidia_p2p_page_table *page_table = nv_mem_context->page_table;
+	unsigned long npages;
 
 	if (page_table->page_size != NVIDIA_P2P_PAGE_SIZE_64KB) {
 		peer_err("nv_dma_map -- assumption of 64KB pages failed size_id=%u\n",
@@ -303,15 +304,30 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 		return ret;
 
 	nv_mem_context->sg_allocated = 1;
+
+#if 1
+#warning "using pci_map_sg"
+        struct pci_dev *pdev = to_pci_dev(dma_device);
+	for_each_sg(sg_head->sgl, sg, nv_mem_context->npages, i) {
+	        sg_set_page(sg, (struct page*)page_table->pages[i]->physical_address, nv_mem_context->page_size, 0);
+        }
+        ret = pci_map_sg(pdev, sg_head->sgl, nv_mem_context->npages, DMA_BIDIRECTIONAL);
+	if (ret <= 0) {
+                peer_err("nv_dma_map -- pci_map_sg error %d\n", ret);
+		return ret;
+	}
+        peer_err("pci_map_sg num mapped pages=%d\n", ret);
+	npages = ret;
+#else
 	for_each_sg(sg_head->sgl, sg, nv_mem_context->npages, i) {
 		sg_set_page(sg, NULL, nv_mem_context->page_size, 0);
 		sg->dma_address = page_table->pages[i]->physical_address;
 		sg->dma_length = nv_mem_context->page_size;
 	}
-
+	npages = nv_mem_context->npages;
 #endif
-
-	*nmap = nv_mem_context->npages;
+#endif
+	*nmap = npages;
 
 	return 0;
 }
