@@ -318,6 +318,10 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 	}
         peer_err("pci_map_sg num mapped pages=%d\n", ret);
 	npages = ret;
+	for_each_sg(sg_head->sgl, sg, npages, i) {
+	  peer_err("dma[%d] addr:0x%016llx len:0x%x\n", i, sg_dma_address(sg), sg_dma_len(sg));
+        }
+
 #else
 	for_each_sg(sg_head->sgl, sg, nv_mem_context->npages, i) {
 		sg_set_page(sg, NULL, nv_mem_context->page_size, 0);
@@ -413,6 +417,7 @@ static int nv_mem_get_pages(unsigned long addr,
 #endif
 {
 	int ret;
+	int i;
 	struct nv_mem_context *nv_mem_context;
 
 	nv_mem_context = (struct nv_mem_context *)client_context;
@@ -428,6 +433,10 @@ static int nv_mem_get_pages(unsigned long addr,
 		peer_err("nv_mem_get_pages -- error %d while calling nvidia_p2p_get_pages()\n", ret);
 		return ret;
 	}
+
+        for (i=0; i<nv_mem_context->page_table->entries; ++i) {
+	  peer_err("page[%d]=0x%016llx\n", i, nv_mem_context->page_table->pages[i]->physical_address);
+        }
 
 	/* No extra access to nv_mem_context->page_table here as we are
 	    called not under a lock and may race with inflight invalidate callback on that buffer.
