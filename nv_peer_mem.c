@@ -307,11 +307,11 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 
 #if 1
 #warning "using pci_map_sg"
-        struct pci_dev *pdev = to_pci_dev(dma_device);
+        struct pci_dev *nic_pdev = to_pci_dev(dma_device);
 	for_each_sg(sg_head->sgl, sg, nv_mem_context->npages, i) {
 	        sg_set_page(sg, (struct page*)page_table->pages[i]->physical_address, nv_mem_context->page_size, 0);
         }
-        ret = pci_map_sg(pdev, sg_head->sgl, nv_mem_context->npages, DMA_BIDIRECTIONAL);
+        ret = pci_map_sg(nic_pdev, sg_head->sgl, nv_mem_context->npages, DMA_BIDIRECTIONAL);
 	if (ret <= 0) {
                 peer_err("nv_dma_map -- pci_map_sg error %d\n", ret);
 		return ret;
