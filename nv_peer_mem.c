@@ -306,6 +306,41 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 	nv_mem_context->sg_allocated = 1;
 
 #if 1
+#warning "using pci_map_single"
+	{
+	  struct pci_dev *nic_pdev = to_pci_dev(dma_device);
+	  int contig = 1;
+	  dma_addr_t dma_handle = 0;
+	  for (i=0; i < nv_mem_context->npages-1; ++i) {
+	    struct nvidia_p2p_page *page = page_table->pages[i];
+	    struct nvidia_p2p_page *next_page = page_table->pages[i+1];
+	    if ((page->physical_address + nv_mem_context->page_size) != next_page->physical_address) {
+	      peer_err("page %d not physically contiguous 0x%llx 0x%llx\n", i, page->physical_address, next_page->physical_address);
+	      contig = 0;
+	      break;
+	    }
+	  }
+	  if (!contig) {
+	    return -EINVAL;
+	  }
+	  dma_handle = pci_map_single(nic_pdev,
+				      (void*)page_table->pages[0]->physical_address, 
+				      nv_mem_context->npages * nv_mem_context->page_size,
+				      DMA_BIDIRECTIONAL);
+	  if (pci_dma_mapping_error(nic_pdev, dma_handle)) {
+	    peer_err("error in pci_map_single\n");
+	    return -EINVAL;
+	  }
+	  peer_err("dma_handle=0x%016llx\n", (u64)dma_handle);
+	  for_each_sg(sg_head->sgl, sg, nv_mem_context->npages, i) {
+	    sg_set_page(sg, (void*)page_table->pages[0]->physical_address, nv_mem_context->page_size, 0);
+	    sg->dma_address = dma_handle + i * nv_mem_context->page_size;
+	    sg->dma_length = nv_mem_context->page_size;
+	    peer_err("dma[%d] addr:0x%016llx len:0x%x\n", i, sg_dma_address(sg), sg_dma_len(sg));
+	  }
+	  npages = nv_mem_context->npages;
+	}
+#elif 0
 #warning "using pci_map_sg"
         struct pci_dev *nic_pdev = to_pci_dev(dma_device);
 	for_each_sg(sg_head->sgl, sg, nv_mem_context->npages, i) {
