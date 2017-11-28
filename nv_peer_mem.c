@@ -75,7 +75,7 @@
  *	so it is not possible to check version compatibility. In this case
  *	let us just avoid dma mappings altogether.
  */
-#if 0 && defined(NVIDIA_P2P_DMA_MAPPING_VERSION) &&	\
+#if 1 && defined(NVIDIA_P2P_DMA_MAPPING_VERSION) &&	\
 	(NVIDIA_P2P_MAJOR_VERSION(NVIDIA_P2P_DMA_MAPPING_VERSION) >= 2)
 #pragma message("Enable nvidia_p2p_dma_map_pages support")
 #define NV_DMA_MAPPING 1
@@ -207,8 +207,10 @@ static int nv_mem_acquire(unsigned long addr, size_t size, void *peer_mem_privat
 	ret = nvidia_p2p_get_pages(0, 0, nv_mem_context->page_virt_start, nv_mem_context->mapped_size,
 			&nv_mem_context->page_table, nv_mem_dummy_callback, nv_mem_context);
 
-	if (ret < 0)
+	if (ret < 0) {
+	        peer_err("nv_mem_acquire -- range {start=0x%llx, size=%zu}\n", nv_mem_context->page_virt_start, nv_mem_context->mapped_size);
 		goto err;
+	}
 
 	ret = nvidia_p2p_put_pages(0, 0, nv_mem_context->page_virt_start,
 				   nv_mem_context->page_table);
@@ -258,13 +260,13 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 			peer_err("nv_dma_map -- invalid pci_dev\n");
 			return -EINVAL;
 		}
-
+		peer_err("calling nv_p2p_dma_map_pages\n"); udelay(1);
 		ret = nvidia_p2p_dma_map_pages(pdev, page_table, &dma_mapping);
 		if (ret) {
 			peer_err("nv_dma_map -- error %d while calling nvidia_p2p_dma_map_pages()\n", ret);
 			return ret;
 		}
-
+		peer_err("checking version\n"); udelay(1);
 		if (!NVIDIA_P2P_DMA_MAPPING_VERSION_COMPATIBLE(dma_mapping)) {
 			peer_err("error, incompatible dma mapping version 0x%08x\n",
 				 dma_mapping->version);
@@ -279,7 +281,7 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 			nvidia_p2p_dma_unmap_pages(pdev, page_table, dma_mapping);
 			return ret;
 		}
-
+		peer_err("creating sg table\n"); udelay(1);
 		nv_mem_context->dma_mapping = dma_mapping;
 		nv_mem_context->sg_allocated = 1;
 		for_each_sg(sg_head->sgl, sg, nv_mem_context->npages, i) {
