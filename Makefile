@@ -45,8 +45,8 @@ NV_P2P_H=$(shell /bin/ls -1 /usr/src/nvidia-*/nvidia/nv-p2p.h 2>/dev/null | tail
 
 all: gen_nv_symvers
 ifneq ($(shell test -e "$(NV_P2P_H)" && echo "true" || echo "" ),)
-	$(info Found $(NV_P2P_H))
-	/bin/cp -f $(NV_P2P_H) $(PWD)/nv-p2p.h
+	#$(info Found $(NV_P2P_H))
+	#/bin/cp -f $(NV_P2P_H) $(PWD)/nv-p2p.h
 else
 	$(info Warning: nv-p2p.h was not found on the system, going to use compat_nv-p2p.h)
 	/bin/cp -f $(PWD)/compat_nv-p2p.h $(PWD)/nv-p2p.h
