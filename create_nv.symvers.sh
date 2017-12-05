@@ -34,7 +34,7 @@ echo -n "" > $MOD_SYMVERS
 
 nvidia_mod=
 #for mod in nvidia $(ls /lib/modules/$KVER/updates/dkms/nvidia*.ko 2>/dev/null)
-for mod in $HOME/drossetti/drivers/resman/_out/Linux_ppc64le_develop/kernel/nvidia*.ko
+for mod in /home/user/drossetti/drivers/resman/_out/Linux_ppc64le_develop/kernel/nvidia*.ko
 do
 	nvidia_mod=$(/sbin/modinfo -F filename -k "$KVER" $mod 2>/dev/null)
 	if [ ! -e "$nvidia_mod" ]; then
