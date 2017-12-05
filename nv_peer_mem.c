@@ -260,13 +260,13 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 			peer_err("nv_dma_map -- invalid pci_dev\n");
 			return -EINVAL;
 		}
-		peer_err("calling nv_p2p_dma_map_pages\n"); udelay(1);
+		peer_err("calling nv_p2p_dma_map_pages\n");// udelay(1);
 		ret = nvidia_p2p_dma_map_pages(pdev, page_table, &dma_mapping);
 		if (ret) {
 			peer_err("nv_dma_map -- error %d while calling nvidia_p2p_dma_map_pages()\n", ret);
 			return ret;
 		}
-		peer_err("checking version\n"); udelay(1);
+		peer_err("checking version\n");// udelay(1);
 		if (!NVIDIA_P2P_DMA_MAPPING_VERSION_COMPATIBLE(dma_mapping)) {
 			peer_err("error, incompatible dma mapping version 0x%08x\n",
 				 dma_mapping->version);
@@ -276,19 +276,23 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 
 		nv_mem_context->npages = dma_mapping->entries;
 
+		peer_err("creating sg table with %d entries\n", dma_mapping->entries);// udelay(1);
 		ret = sg_alloc_table(sg_head, dma_mapping->entries, GFP_KERNEL);
 		if (ret) {
 			nvidia_p2p_dma_unmap_pages(pdev, page_table, dma_mapping);
 			return ret;
 		}
-		peer_err("creating sg table\n"); udelay(1);
+
 		nv_mem_context->dma_mapping = dma_mapping;
 		nv_mem_context->sg_allocated = 1;
 		for_each_sg(sg_head->sgl, sg, nv_mem_context->npages, i) {
+			peer_err("sg[%d]->dma_address=0x%llx\n", i, dma_mapping->dma_addresses[i]);// udelay(1);
 			sg_set_page(sg, NULL, nv_mem_context->page_size, 0);
 			sg->dma_address = dma_mapping->dma_addresses[i];
 			sg->dma_length = nv_mem_context->page_size;
 		}
+
+		npages = nv_mem_context->npages;
 	}
 #else
 	nv_mem_context->npages = PAGE_ALIGN(nv_mem_context->mapped_size) >>
