@@ -159,7 +159,7 @@ static void nv_get_p2p_free_callback(void *data)
 #if NV_DMA_MAPPING
 	ret = nvidia_p2p_free_dma_mapping(dma_mapping); 
 	if (ret)
-                peer_err("nv_get_p2p_free_callback -- error %d while calling nvidia_p2p_free_dma_mapping()\n", ret);
+		peer_err("nv_get_p2p_free_callback -- error %d while calling nvidia_p2p_free_dma_mapping() dma_mapping=%p\n", ret, dma_mapping);
 #endif
 	ret = nvidia_p2p_free_page_table(page_table);
 	if (ret)
@@ -266,7 +266,8 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 			peer_err("nv_dma_map -- error %d while calling nvidia_p2p_dma_map_pages()\n", ret);
 			return ret;
 		}
-		peer_err("checking version\n");// udelay(1);
+		peer_err("dma_mapping=%p\n", dma_mapping);// udelay(1);
+
 		if (!NVIDIA_P2P_DMA_MAPPING_VERSION_COMPATIBLE(dma_mapping)) {
 			peer_err("error, incompatible dma mapping version 0x%08x\n",
 				 dma_mapping->version);
