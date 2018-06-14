@@ -123,6 +123,8 @@ MODULE_PARM_DESC(enable_info, "enable info tracing");
 #define NV_DMA_MAPPING 0
 #endif
 
+#define _DEBUG_ONLY_ 1
+
 /*
  * run-time binding to NV module symbols
  */
@@ -460,6 +462,7 @@ static int nv_dma_unmap(struct sg_table *sg_head, void *context,
 	if (nv_mem_context->dma_mapping) {
 		peer_dbg("freeing dma_mapping %p\n", nv_mem_context->dma_mapping);
 		nv_dma_unmap_pages(pci_device, nv_mem_context->page_table, nv_mem_context->dma_mapping);
+		nv_mem_context->dma_mapping = NULL;
 	}
 #endif
 
@@ -495,6 +498,7 @@ static void nv_mem_put_pages(struct sg_table *sg_head, void *context)
 			ret,  nv_mem_context->page_table);
 	}
 #endif
+	nv_mem_context->page_table = NULL;
 
 out:
 	return;
