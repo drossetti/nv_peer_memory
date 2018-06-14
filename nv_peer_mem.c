@@ -243,7 +243,7 @@ static void nv_get_p2p_free_callback(void *data)
 	 * which do partial clean-up if under invalidation callback, thanks to 
 	 * nv_mem_context->is_callback==1
 	 */
-	ACCESS_ONCE(nv_mem_context->is_callback) = 1;
+	WRITE_ONCE(nv_mem_context->is_callback, 1);
 
 	(*mem_invalidate_callback) (reg_handle, nv_mem_context->core_context);
 
@@ -448,7 +448,7 @@ static int nv_dma_unmap(struct sg_table *sg_head, void *context,
 		return -EINVAL;		
 	}
 
-	if (ACCESS_ONCE(nv_mem_context->is_callback))
+	if (READ_ONCE(nv_mem_context->is_callback))
 		goto out;
 
 	if (!nv_mem_context->sg_allocated) {
@@ -480,7 +480,7 @@ static void nv_mem_put_pages(struct sg_table *sg_head, void *context)
 		nv_mem_context->sg_allocated = 0;
 	}
 
-	if (ACCESS_ONCE(nv_mem_context->is_callback))
+	if (READ_ONCE(nv_mem_context->is_callback))
 		goto out;
 
 	ret = nv_put_pages(0, 0, nv_mem_context->page_virt_start,
@@ -514,7 +514,7 @@ static int nv_mem_get_pages(unsigned long addr,
 			  size_t size, int write, int force,
 			  struct sg_table *sg_head,
 			  void *client_context,
-			  void *core_context)
+			  u64 core_context)
 {
 	int ret;
 	struct nv_mem_context *nv_mem_context;
