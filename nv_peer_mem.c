@@ -50,6 +50,8 @@
 #define DRV_VERSION	"1.0-7"
 #define DRV_RELDATE	__DATE__
 
+#define _DEBUG_ONLY_ 1
+
 #define peer_err(FMT, ARGS...) printk(KERN_ERR   DRV_NAME " %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS)
 
 #ifndef NVIDIA_P2P_MAJOR_VERSION_MASK
@@ -341,9 +343,11 @@ static int nv_dma_unmap(struct sg_table *sg_head, void *context,
 #if NV_DMA_MAPPING
 	{
 		struct pci_dev *pdev = to_pci_dev(dma_device);
-		if (nv_mem_context->dma_mapping)
+		if (nv_mem_context->dma_mapping) {
 			nvidia_p2p_dma_unmap_pages(pdev, nv_mem_context->page_table,
 						   nv_mem_context->dma_mapping);
+                        nv_mem_context->dma_mapping = NULL;
+                }
 	}
 #endif
 
@@ -373,7 +377,7 @@ static void nv_mem_put_pages(struct sg_table *sg_head, void *context)
 			ret,  nv_mem_context->page_table);
 	}
 #endif
-
+        nv_mem_context->page_table = NULL;
 
 out:
 	if (nv_mem_context->sg_allocated) {
