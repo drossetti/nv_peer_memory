@@ -61,7 +61,7 @@ static int enable_dbg = 0;
                         printk(KERN_DEBUG DRV_NAME " %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS); \
         } while(0)
 
-#define MAX_SG_DUMP 10
+#define MAX_SG_DUMP 0
 
 MODULE_AUTHOR("Yishai Hadas");
 MODULE_DESCRIPTION("NVIDIA GPU memory plug-in");
@@ -147,7 +147,7 @@ static int load_nv_symbols(void)
                 peer_err("can't get symbol for " #SYMNAME "\n");        \
                 retcode = -EINVAL;                                      \
         } else {                                                        \
-                peer_info(#SYMNAME "=%p\n", FUNPTR);                 \
+                peer_info(#SYMNAME "=%px\n", FUNPTR);                 \
         }
 
         do {
@@ -240,24 +240,36 @@ static void nv_get_p2p_free_callback(void *data)
 #if NV_DMA_MAPPING
 	dma_mapping = nv_mem_context->dma_mapping;
 #endif
+
 	/* For now don't set nv_mem_context->page_table to NULL.
 	 * rdma core code will always call nv_mem_put_pages() and nv_dma_unmap(),
 	 * which do partial clean-up if under invalidation callback, thanks to 
 	 * nv_mem_context->is_callback==1
 	 */
 	WRITE_ONCE(nv_mem_context->is_callback, 1);
+	wmb();
 
-	(*mem_invalidate_callback) (reg_handle, nv_mem_context->core_context);
+	peer_err("nv_mem_context:%px page_table:%px dma_mapping:%px VA:%llx-%llx npages:%lu\n",
+		 nv_mem_context, page_table, dma_mapping, nv_mem_context->page_virt_start, nv_mem_context->page_virt_end, nv_mem_context->npages);
+	
+	(*mem_invalidate_callback) (reg_handle, (uint64_t)nv_mem_context->core_context);
 
 #if NV_DMA_MAPPING
-	ret = nv_free_dma_mapping(dma_mapping);
-	if (ret)
-		peer_err("nv_get_p2p_free_callback -- error %d while calling nvidia_p2p_free_page_table()\n", ret);
+	if (!dma_mapping) {
+	  peer_err("invalid dma_mapping\n");
+	} else {
+	  ret = nv_free_dma_mapping(dma_mapping);
+	  if (ret)
+	    peer_err("nv_get_p2p_free_callback -- error %d while calling nvidia_p2p_free_page_table()\n", ret);
+	}
 #endif
-	ret = nv_free_page_table(page_table);
-	if (ret)
-		peer_err("nv_get_p2p_free_callback -- error %d while calling nvidia_p2p_free_page_table()\n", ret);
-
+	if (!page_table) {
+	  peer_err("invalid page_table\n");
+	} else {
+	  ret = nv_free_page_table(page_table);
+	  if (ret)
+	    peer_err("nv_get_p2p_free_callback -- error %d while calling nvidia_p2p_free_page_table()\n", ret);
+	}
 out:
 	module_put(THIS_MODULE);
 	return;
@@ -271,6 +283,10 @@ static void nv_mem_dummy_callback(void *data)
 	int ret = 0;
 
 	__module_get(THIS_MODULE);
+
+
+	peer_err("nv_mem_context:%px page_table:%px dma_mapping:%px VA:%llx-%llx npages:%lu\n",
+		 nv_mem_context, nv_mem_context->page_table, nv_mem_context->dma_mapping, nv_mem_context->page_virt_start, nv_mem_context->page_virt_end, nv_mem_context->npages);
 
 	ret = nv_free_page_table(nv_mem_context->page_table);
 	if (ret)
@@ -297,14 +313,14 @@ static int nv_mem_acquire(unsigned long addr, size_t size, void *peer_mem_privat
 	nv_mem_context->page_virt_end   = (addr + size + GPU_PAGE_SIZE - 1) & GPU_PAGE_MASK;
 	nv_mem_context->mapped_size  = nv_mem_context->page_virt_end - nv_mem_context->page_virt_start;
 
-        peer_dbg("addr=%lx size=%zu page_virt_start=%llx mapped_size=%zu\n", 
-                  addr, size, nv_mem_context->page_virt_start, nv_mem_context->mapped_size);
+        //peer_dbg("addr=%lx size=%zu page_virt_start=%llx mapped_size=%zu\n", 
+        //          addr, size, nv_mem_context->page_virt_start, nv_mem_context->mapped_size);
 
 	ret = nv_get_pages(0, 0, nv_mem_context->page_virt_start, nv_mem_context->mapped_size,
 			&nv_mem_context->page_table, nv_mem_dummy_callback, nv_mem_context);
 
 	if (ret < 0) {
-                peer_dbg("nv_mem_acquire -- nvidia_p2p_get_pages error %d for addr=%lx\n", ret, addr);
+		//peer_dbg("nv_mem_acquire -- nvidia_p2p_get_pages error %d for addr=%lx\n", ret, addr);
 		goto err;
         }
 
@@ -450,6 +466,8 @@ static int nv_dma_unmap(struct sg_table *sg_head, void *context,
 		return -EINVAL;		
 	}
 
+	peer_dbg("nv_mem_context:%px page_table:%px is_callback:%d\n", nv_mem_context, nv_mem_context->page_table, READ_ONCE(nv_mem_context->is_callback));
+	
 	if (READ_ONCE(nv_mem_context->is_callback))
 		goto out;
 
@@ -460,7 +478,7 @@ static int nv_dma_unmap(struct sg_table *sg_head, void *context,
 
 #if NV_DMA_MAPPING
 	if (nv_mem_context->dma_mapping) {
-		peer_dbg("freeing dma_mapping %p\n", nv_mem_context->dma_mapping);
+		peer_dbg("freeing dma_mapping %px\n", nv_mem_context->dma_mapping);
 		nv_dma_unmap_pages(pci_device, nv_mem_context->page_table, nv_mem_context->dma_mapping);
 		nv_mem_context->dma_mapping = NULL;
 	}
@@ -477,6 +495,8 @@ static void nv_mem_put_pages(struct sg_table *sg_head, void *context)
 	struct nv_mem_context *nv_mem_context =
 		(struct nv_mem_context *) context;
 
+	peer_dbg("nv_mem_context:%px page_table:%px is_callback:%d\n", nv_mem_context, nv_mem_context->page_table, READ_ONCE(nv_mem_context->is_callback));
+	
 	// freeing table even in the invalidation callback case
 	if (nv_mem_context->sg_allocated) {
 		sg_free_table(sg_head);
@@ -494,7 +514,7 @@ static void nv_mem_put_pages(struct sg_table *sg_head, void *context)
 	  * (e.g. concurrent callback with that call)
 	*/
 	if (ret < 0) {
-		printk(KERN_ERR "error %d while calling nvidia_p2p_put_pages, page_table=%p \n",
+		printk(KERN_ERR "error %d while calling nvidia_p2p_put_pages, page_table=%px\n",
 			ret,  nv_mem_context->page_table);
 	}
 #endif
@@ -529,7 +549,7 @@ static int nv_mem_get_pages(unsigned long addr,
 
         peer_dbg("addr=%lx size=%zu\n", addr, size);
 
-	nv_mem_context->core_context = core_context;
+	nv_mem_context->core_context = (void *)core_context;
 	nv_mem_context->page_size = GPU_PAGE_SIZE;
 
 	ret = nv_get_pages(0, 0, nv_mem_context->page_virt_start, nv_mem_context->mapped_size,
