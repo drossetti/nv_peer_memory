@@ -360,7 +360,6 @@ static void nv_get_p2p_free_callback(void *data)
 	 * nv_mem_context->is_callback==1
 	 */
 	WRITE_ONCE(nv_mem_context->is_callback, 1);
-	wmb();
 
 	peer_err("nv_mem_context:%px page_table:%px dma_mapping:%px VA:%llx-%llx npages:%lu\n",
 		 nv_mem_context, page_table, dma_mapping, nv_mem_context->page_virt_start, nv_mem_context->page_virt_end, nv_mem_context->npages);
@@ -456,6 +455,7 @@ static int nv_mem_acquire(unsigned long addr, size_t size, void *peer_mem_privat
 		peer_err("nv_mem_acquire -- error %d while calling nvidia_p2p_put_pages()\n", ret);
 		goto err;
 	}
+        nv_mem_context->page_table = NULL;
 
 	/* 1 means mine */
 	*client_context = nv_mem_context;
@@ -703,6 +703,7 @@ static void nv_mem_release(void *context)
 {
 	struct nv_mem_context *nv_mem_context =
 		(struct nv_mem_context *) context;
+	peer_dbg("nv_mem_context:%px page_table:%px dma_mapping:%px is_callback:%d\n", nv_mem_context, nv_mem_context->page_table, nv_mem_context->dma_mapping, READ_ONCE(nv_mem_context->is_callback));
 	ctxlist_del(nv_mem_context);
 	kfree(nv_mem_context);
 	module_put(THIS_MODULE);
