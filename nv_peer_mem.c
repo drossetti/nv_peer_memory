@@ -162,7 +162,7 @@ static int ctxlist_is_tracked(struct nv_mem_context *ctx)
 static int __ctxlist_add(struct nv_mem_context *ctx)
 {
 	int rc = 0;
-	// check for dups
+	peer_dbg("ctx:%px\n", ctx);	
 	if (!ctx) {
 		peer_err("invalid NULL ctx\n");
 		rc = EINVAL;
@@ -191,8 +191,8 @@ static int ctxlist_add(struct nv_mem_context *ctx)
 static int __ctxlist_del(struct nv_mem_context *ctx)
 {
 	int rc = 0;
-	// check for dups
-	if (!__ctxlist_is_tracked(ctx)) {
+	peer_dbg("ctx:%px\n", ctx);
+	if (!__ctxlist_is_tracked(ctx)) {		
 		peer_err("ouch, ctx=%px is not tracked, while trying to remove from list, nothing to do\n", ctx);
 		rc = EINVAL;
 		goto out;
@@ -365,7 +365,8 @@ static int nv_mem_acquire(unsigned long addr, size_t size, void *peer_mem_privat
 		peer_err("error, failing acquire for dup context %px\n", nv_mem_context);
 		goto err;
 	}
-	
+
+	peer_dbg("nv_mem_context:%px page_table:%px dma_mapping:%px is_callback:%d\n", nv_mem_context, nv_mem_context->page_table, nv_mem_context->dma_mapping, READ_ONCE(nv_mem_context->is_callback));
 	__module_get(THIS_MODULE);
 	return 1;
 
@@ -385,48 +386,62 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 	struct nv_mem_context *nv_mem_context =
 		(struct nv_mem_context *) context;
 	struct nvidia_p2p_page_table *page_table;
+	unsigned long flags;
 
-	if (!ctxlist_is_tracked(nv_mem_context)) {
+	spin_lock_irqsave(&ctx_list.lock, flags);
+	if (!__ctxlist_is_tracked(nv_mem_context)) {
 		peer_err("error, invalid ctx %px\n", nv_mem_context);
-            return -EINVAL;
+		ret = -EINVAL;
+		goto out;
 	}
 
 	page_table = nv_mem_context->page_table;
 
-        if (!page_table) {
-            peer_err("error, invalid p2p page table\n");
-            return -EINVAL;
-        }
+	if (!page_table) {
+		peer_err("error, invalid p2p page table\n");
+		ret = -EINVAL;
+		goto out;
+	}
 
 	if (page_table->page_size != NVIDIA_P2P_PAGE_SIZE_64KB) {
-		peer_err("nv_dma_map -- assumption of 64KB pages failed size_id=%u\n",
-					nv_mem_context->page_table->page_size);
-		return -EINVAL;
+		peer_err("error, assumption of 64KB pages failed size_id=%u\n",
+			 page_table->page_size);
+		ret = -EINVAL;
+		goto out;
 	}
+
+	if (nv_mem_context->sg_allocated) {
+		peer_err("error, sg allocated already\n");
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (!dma_device) {
+		peer_err("invalid dma_device\n");
+		ret = -EINVAL;
+		goto out;
+	}
+
+	BUG_ON(nv_mem_context->is_callback);
 
 #if NV_DMA_MAPPING
 	{
 		struct nvidia_p2p_dma_mapping *dma_mapping;
 		struct pci_dev *pdev = to_pci_dev(dma_device);
 
-		if (!pdev) {
-			peer_err("nv_dma_map -- invalid pci_dev\n");
-			return -EINVAL;
-		}
-
 		ret = nvidia_p2p_dma_map_pages(pdev, page_table, &dma_mapping);
 		if (ret) {
-			peer_err("nv_dma_map -- error %d while calling nvidia_p2p_dma_map_pages()\n", ret);
-			return ret;
+			peer_err("error %d in nvidia_p2p_dma_map_pages\n",
+				 ret);
+			goto out;
 		}
 
 		if (!NVIDIA_P2P_DMA_MAPPING_VERSION_COMPATIBLE(dma_mapping)) {
-			peer_err("error, incompatible dma mapping version 0x%08x\n",
-				 dma_mapping->version);
+			peer_err("error, incompatible dma mapping version 0x%08x\n", dma_mapping->version);
 			nvidia_p2p_dma_unmap_pages(pdev, page_table, dma_mapping);
-			return -EINVAL;
+			ret = -EINVAL;
+			goto out;
 		}
-
 		nv_mem_context->npages = dma_mapping->entries;
 
 		ret = sg_alloc_table(sg_head, dma_mapping->entries, GFP_KERNEL);
@@ -451,12 +466,15 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 		peer_err("nv_dma_map -- unexpected number of page table entries got=%u, expected=%lu\n",
 					page_table->entries,
 					nv_mem_context->npages);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out;
 	}
 
 	ret = sg_alloc_table(sg_head, nv_mem_context->npages, GFP_KERNEL);
-	if (ret)
-		return ret;
+	if (ret) {
+		// leaking kernel resources
+		goto out;
+	}
 
 	nv_mem_context->sg_allocated = 1;
 	for_each_sg(sg_head->sgl, sg, nv_mem_context->npages, i) {
@@ -466,10 +484,12 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 	}
 
 #endif
+	peer_dbg("nv_mem_context:%px page_table:%px dma_mapping:%px is_callback:%d\n", nv_mem_context, nv_mem_context->page_table, nv_mem_context->dma_mapping, READ_ONCE(nv_mem_context->is_callback));
 
 	*nmap = nv_mem_context->npages;
-
-	return 0;
+ out:
+	spin_unlock_irqrestore(&ctx_list.lock, flags);
+	return ret;
 }
 
 static int nv_dma_unmap(struct sg_table *sg_head, void *context,
@@ -601,8 +621,9 @@ static int nv_mem_get_pages(unsigned long addr,
 		ret = -EINVAL;
 		goto out;
 	}
-	
-        peer_dbg("addr=%lx size=%zu\n", addr, size);
+
+	peer_dbg("nv_mem_context:%px page_table:%px dma_mapping:%px is_callback:%d\n", nv_mem_context, nv_mem_context->page_table, nv_mem_context->dma_mapping, READ_ONCE(nv_mem_context->is_callback));
+	BUG_ON(nv_mem_context->is_callback);
 
 	nv_mem_context->core_context = (void *)core_context;
 	nv_mem_context->page_size = GPU_PAGE_SIZE;
@@ -647,13 +668,16 @@ static int __init nv_mem_client_init(void)
 {
 	strcpy(nv_mem_client.name, DRV_NAME);
 	strcpy(nv_mem_client.version, DRV_VERSION);
+
+        peer_info("loading %s:%s\n", DRV_NAME, DRV_VERSION);
+
+	ctxlist_init();
+
 	reg_handle = ib_register_peer_memory_client(&nv_mem_client,
 					     &mem_invalidate_callback);
 	if (!reg_handle)
 		return -EINVAL;
 
-	ctxlist_init();
-	
 	return 0;
 }
 
