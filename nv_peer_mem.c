@@ -250,7 +250,7 @@ static int ctxlist_is_tracked(struct nv_mem_context *ctx)
 static int __ctxlist_add(struct nv_mem_context *ctx)
 {
 	int rc = 0;
-	// check for dups
+	peer_dbg("ctx:%px\n", ctx);	
 	if (!ctx) {
 		peer_err("invalid NULL ctx\n");
 		rc = EINVAL;
@@ -279,8 +279,8 @@ static int ctxlist_add(struct nv_mem_context *ctx)
 static int __ctxlist_del(struct nv_mem_context *ctx)
 {
 	int rc = 0;
-	// check for dups
-	if (!__ctxlist_is_tracked(ctx)) {
+	peer_dbg("ctx:%px\n", ctx);
+	if (!__ctxlist_is_tracked(ctx)) {		
 		peer_err("ouch, ctx=%px is not tracked, while trying to remove from list, nothing to do\n", ctx);
 		rc = EINVAL;
 		goto out;
@@ -464,7 +464,8 @@ static int nv_mem_acquire(unsigned long addr, size_t size, void *peer_mem_privat
 		peer_err("error, failing acquire for dup context %px\n", nv_mem_context);
 		goto err;
 	}
-	
+
+	peer_dbg("nv_mem_context:%px page_table:%px dma_mapping:%px is_callback:%d\n", nv_mem_context, nv_mem_context->page_table, nv_mem_context->dma_mapping, READ_ONCE(nv_mem_context->is_callback));
 	__module_get(THIS_MODULE);
 	return 1;
 
@@ -487,96 +488,113 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 		(struct nv_mem_context *) context;
 	struct nvidia_p2p_page_table *page_table;
 	struct pci_dev *pci_device = dma_to_pci_dev(dma_device);
+	unsigned long flags;
 
-	if (!ctxlist_is_tracked(nv_mem_context)) {
+	spin_lock_irqsave(&ctx_list.lock, flags);
+	if (!__ctxlist_is_tracked(nv_mem_context)) {
 		peer_err("error, invalid ctx %px\n", nv_mem_context);
-            return -EINVAL;
+		ret = -EINVAL;
+		goto out;
 	}
 
 	page_table = nv_mem_context->page_table;
 
-        if (!page_table) {
-            peer_err("error, invalid p2p page table\n");
-            return -EINVAL;
-        }
+	if (!page_table) {
+		peer_err("error, invalid p2p page table\n");
+		ret = -EINVAL;
+		goto out;
+	}
 
 	if (page_table->page_size != NVIDIA_P2P_PAGE_SIZE_64KB) {
 		peer_err("error, assumption of 64KB pages failed size_id=%u\n",
 			 page_table->page_size);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out;
 	}
 
 	if (nv_mem_context->sg_allocated) {
 		peer_err("error, sg allocated already\n");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out;
 	}
 
 	if (!pci_device) {
 		peer_err("invalid pci_device\n");
-		return -EINVAL;		
+		ret = -EINVAL;
+		goto out;
 	}
 
+	BUG_ON(nv_mem_context->is_callback);
+
 #if NV_DMA_MAPPING
-        {
-                struct nvidia_p2p_dma_mapping *dma_mapping;
+	{
+		struct nvidia_p2p_dma_mapping *dma_mapping;
 
-                ret = nv_dma_map_pages(pci_device, page_table, &dma_mapping);
-                if (ret) {
-                        peer_err("error %d in nvidia_p2p_dma_map_pages\n",
-                                 ret);
-                        return ret;
-                }
+		ret = nv_dma_map_pages(pci_device, page_table, &dma_mapping);
+		if (ret) {
+			peer_err("error %d in nvidia_p2p_dma_map_pages\n",
+				 ret);
+			goto out;
+		}
 
-                if (!NVIDIA_P2P_DMA_MAPPING_VERSION_COMPATIBLE(dma_mapping)) {
-                        peer_err("error, incompatible dma mapping version 0x%08x\n", dma_mapping->version);
-                        nv_dma_unmap_pages(pci_device, page_table, dma_mapping);
-                        return -EINVAL;
-                }
-                nv_mem_context->npages = dma_mapping->entries;
+		if (!NVIDIA_P2P_DMA_MAPPING_VERSION_COMPATIBLE(dma_mapping)) {
+			peer_err("error, incompatible dma mapping version 0x%08x\n", dma_mapping->version);
+			nv_dma_unmap_pages(pci_device, page_table, dma_mapping);
+			ret = -EINVAL;
+			goto out;
+		}
+		nv_mem_context->npages = dma_mapping->entries;
 
-                ret = sg_alloc_table(sg_head, dma_mapping->entries, GFP_KERNEL);
-                if (ret) {
-                        nv_dma_unmap_pages(pci_device, page_table, dma_mapping);
-                        return ret;
-                }
-                nv_mem_context->dma_mapping = dma_mapping;
+		ret = sg_alloc_table(sg_head, dma_mapping->entries, GFP_KERNEL);
+		if (ret) {
+			nv_dma_unmap_pages(pci_device, page_table, dma_mapping);
+			ret = ret;
+			goto out;
+		}
+		nv_mem_context->dma_mapping = dma_mapping;
 
-                nv_mem_context->sg_allocated = 1;
-                for_each_sg(sg_head->sgl, sg, dma_mapping->entries, i) {
-                        sg_set_page(sg, NULL, GPU_PAGE_SIZE, 0);
-                        sg->dma_address = dma_mapping->dma_addresses[i];
-                        sg->dma_length = GPU_PAGE_SIZE;
-                        if (i<MAX_SG_DUMP) 
-                                peer_dbg("sg[%d] 0x%016llx %u %s\n", 
-                                          i, sg->dma_address, sg->dma_length, (i==(MAX_SG_DUMP-1))?"and counting...":"");
-                }
+		nv_mem_context->sg_allocated = 1;
+		for_each_sg(sg_head->sgl, sg, dma_mapping->entries, i) {
+			sg_set_page(sg, NULL, GPU_PAGE_SIZE, 0);
+			sg->dma_address = dma_mapping->dma_addresses[i];
+			sg->dma_length = GPU_PAGE_SIZE;
+			if (i<MAX_SG_DUMP) 
+				peer_dbg("sg[%d] 0x%016llx %u %s\n", 
+					  i, sg->dma_address, sg->dma_length, (i==(MAX_SG_DUMP-1))?"and counting...":"");
+		}
 	}
 #else
 	nv_mem_context->npages = PAGE_ALIGN(nv_mem_context->mapped_size) >>
 						GPU_PAGE_SHIFT;
 
 	if (nv_mem_context->page_table->entries != nv_mem_context->npages) {
-		peer_err("error, unexpected number of page table entries got=%u, expected=%lu\n",
-					nv_mem_context->page_table->entries,
-					nv_mem_context->npages);
-		return -EINVAL;
+		peer_err("error, unexpected number of page table entries got=%u, expected=%lu, leaking kernel resources\n",
+			 nv_mem_context->page_table->entries,
+			 nv_mem_context->npages);
+		ret = -EINVAL;
+		goto out;
 	}
 
 	ret = sg_alloc_table(sg_head, nv_mem_context->npages, GFP_KERNEL);
-	if (ret)
-		return ret;
+	if (ret) {
+		// leaking kernel resources
+		goto out;
+	}
 
 	nv_mem_context->sg_allocated = 1;
 	for_each_sg(sg_head->sgl, sg, nv_mem_context->npages, i) {
 		sg_set_page(sg, NULL, nv_mem_context->page_size, 0);
 		sg->dma_address = page_table->pages[i]->physical_address;
 		sg->dma_length = nv_mem_context->page_size;
-                if (i<MAX_SG_DUMP)
-                    peer_dbg("nv_dma_map -- %d 0x%016llx %u\n", i, sg->dma_address, sg->dma_length);
+		if (i<MAX_SG_DUMP)
+			peer_dbg("nv_dma_map -- %d 0x%016llx %u\n", i, sg->dma_address, sg->dma_length);
 	}
 #endif
+	peer_dbg("nv_mem_context:%px page_table:%px dma_mapping:%px is_callback:%d\n", nv_mem_context, nv_mem_context->page_table, nv_mem_context->dma_mapping, READ_ONCE(nv_mem_context->is_callback));
 
 	*nmap = nv_mem_context->npages;
+ out:
+	spin_unlock_irqrestore(&ctx_list.lock, flags);
 	return ret;
 }
 
@@ -712,8 +730,9 @@ static int nv_mem_get_pages(unsigned long addr,
 		ret = -EINVAL;
 		goto out;
 	}
-	
-        peer_dbg("addr=%lx size=%zu\n", addr, size);
+
+	peer_dbg("nv_mem_context:%px page_table:%px dma_mapping:%px is_callback:%d\n", nv_mem_context, nv_mem_context->page_table, nv_mem_context->dma_mapping, READ_ONCE(nv_mem_context->is_callback));
+	BUG_ON(nv_mem_context->is_callback);
 
 	nv_mem_context->core_context = (void *)core_context;
 	nv_mem_context->page_size = GPU_PAGE_SIZE;
@@ -761,6 +780,8 @@ static int __init nv_mem_client_init(void)
 
         peer_info("loading %s:%s\n", DRV_NAME, DRV_VERSION);
 
+	ctxlist_init();
+
         if (load_nv_symbols())
                 return -EINVAL;
 
@@ -770,9 +791,6 @@ static int __init nv_mem_client_init(void)
                 unload_nv_symbols();
 		return -EINVAL;
         }
-
-	ctxlist_init();
-	
 	return 0;
 }
 
