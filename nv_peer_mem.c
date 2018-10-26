@@ -316,7 +316,7 @@ static void nv_get_p2p_free_callback(void *data)
 			peer_err("error, while dequeuing nv_mem_context:%px\n", nv_mem_context);
 		}
 		peer_dbg("before kfree\n");
-		memset(nv_mem_context, 0, sizeof(nv_mem_context));
+		memset(nv_mem_context, 0, sizeof(*nv_mem_context));
 		kfree(nv_mem_context);
 	}
 out:
