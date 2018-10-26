@@ -51,8 +51,20 @@
 #define DRV_RELDATE	__DATE__
 
 #define peer_err(FMT, ARGS...)  printk(KERN_ERR   DRV_NAME "ERR %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS)
-#define peer_info(FMT, ARGS...) printk(KERN_ERR   DRV_NAME "INFO %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS)
-#define peer_dbg(FMT, ARGS...)  printk(KERN_ERR   DRV_NAME "DBG %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS)
+
+static int enable_info = 0;
+#define peer_info(FMT, ARGS...)                                         \
+        do {                                                            \
+                if (enable_info)                                        \
+                        printk(KERN_ERR  DRV_NAME " INFO %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS); \
+        } while(0)
+
+static int enable_dbg = 0;
+#define peer_dbg(FMT, ARGS...)                                          \
+        do {                                                            \
+                if (enable_dbg /*&& printk_ratelimit()*/)		\
+                        printk(KERN_ERR DRV_NAME " DBG %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS); \
+        } while(0)
 
 #ifndef NVIDIA_P2P_MAJOR_VERSION_MASK
 #define NVIDIA_P2P_MAJOR_VERSION_MASK   0xffff0000
@@ -97,6 +109,10 @@ MODULE_AUTHOR("Yishai Hadas");
 MODULE_DESCRIPTION("NVIDIA GPU memory plug-in");
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_VERSION(DRV_VERSION);
+module_param(enable_dbg, int, 0000);
+MODULE_PARM_DESC(enable_dbg, "enable debug tracing");
+module_param(enable_info, int, 0000);
+MODULE_PARM_DESC(enable_info, "enable info tracing");
 
 #define GPU_PAGE_SHIFT   16
 #define GPU_PAGE_SIZE    ((u64)1 << GPU_PAGE_SHIFT)
