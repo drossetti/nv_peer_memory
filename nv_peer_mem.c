@@ -52,7 +52,7 @@
 
 #define peer_err(FMT, ARGS...)  printk(KERN_ERR   DRV_NAME "ERR %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS)
 
-static int enable_info = 0;
+static int enable_info = 1;
 #define peer_info(FMT, ARGS...)                                         \
         do {                                                            \
                 if (enable_info)                                        \
