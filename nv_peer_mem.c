@@ -130,10 +130,31 @@ struct nv_mem_context {
 	uint64_t guard1;
 };
 
+
+#if 0
+typedef spinlock_t ctxlist_lock_t;
+#define ctxlist_lock_init()				\
+	spin_lock_init(&ctx_list.lock)
+#define ctxlist_lock()					\
+	unsigned long flags;				\
+	spin_lock_irqsave(&ctx_list.lock, flags);
+#define cxtlist_unlock()				\
+	spin_unlock_irqrestore(&ctx_list.lock, flags)
+#else
+typedef struct mutex ctxlist_lock_t;
+#define ctxlist_lock_init()				\
+	mutex_init(&ctx_list.lock)
+#define ctxlist_lock()					\
+	mutex_lock(&ctx_list.lock)
+#define ctxlist_unlock()				\
+	mutex_unlock(&ctx_list.lock)
+#endif
+
 struct nv_ctx_list {
 	struct list_head head;
-	spinlock_t lock;
+	ctxlist_lock_t lock;
 } ctx_list;
+
 
 static int __ctxlist_is_tracked(struct nv_mem_context *ctx)
 {
@@ -153,10 +174,9 @@ static int __ctxlist_is_tracked(struct nv_mem_context *ctx)
 static int ctxlist_is_tracked(struct nv_mem_context *ctx)
 {
 	int rc = 0;
-	unsigned long flags;
-	spin_lock_irqsave(&ctx_list.lock, flags);
+	ctxlist_lock();
 	rc = __ctxlist_is_tracked(ctx);
-	spin_unlock_irqrestore(&ctx_list.lock, flags);
+	ctxlist_unlock();
 	return rc;
 }
 
@@ -182,10 +202,10 @@ static int __ctxlist_add(struct nv_mem_context *ctx)
 static int ctxlist_add(struct nv_mem_context *ctx)
 {
 	int rc = 0;
-	unsigned long flags;
-	spin_lock_irqsave(&ctx_list.lock, flags);
+	
+	ctxlist_lock();
 	rc = __ctxlist_add(ctx);
-	spin_unlock_irqrestore(&ctx_list.lock, flags);
+	ctxlist_unlock();
 	return rc;
 }
 
@@ -206,31 +226,31 @@ static int __ctxlist_del(struct nv_mem_context *ctx)
 static int ctxlist_del(struct nv_mem_context *ctx)
 {
 	int rc = 0;
-	unsigned long flags;
+	
 	peer_dbg("before lock\n");
-	spin_lock_irqsave(&ctx_list.lock, flags);
+	ctxlist_lock();
 	peer_dbg("after lock\n");
 	rc = __ctxlist_del(ctx);
-	spin_unlock_irqrestore(&ctx_list.lock, flags);
+	ctxlist_unlock();
 	return rc;
 }
 
 static int ctxlist_is_empty(void)
 {
 	int rc = 0;
-	unsigned long flags;
-	spin_lock_irqsave(&ctx_list.lock, flags);
+	
+	ctxlist_lock();
 	if (list_empty(&ctx_list.head)) {
 		rc = 1;
 	}
-	spin_unlock_irqrestore(&ctx_list.lock, flags);
+	ctxlist_unlock();
 	return rc;
 }
 
 static void ctxlist_init(void)
 {
 	INIT_LIST_HEAD(&ctx_list.head);
-	spin_lock_init(&ctx_list.lock);
+	ctxlist_lock_init();
 }
 
 static void nv_get_p2p_free_callback(void *data)
@@ -241,11 +261,11 @@ static void nv_get_p2p_free_callback(void *data)
 #if NV_DMA_MAPPING
 	struct nvidia_p2p_dma_mapping *dma_mapping = NULL;
 #endif
-	unsigned long flags;
+	
 	int pid_n = pid_nr(task_pid(current));
 	peer_dbg("before module get\n");
 	__module_get(THIS_MODULE);
-	spin_lock_irqsave(&ctx_list.lock, flags);
+	ctxlist_lock();
 
 	if (!nv_mem_context) {
 		peer_err("invalid nv_mem_context\n");
@@ -280,7 +300,7 @@ static void nv_get_p2p_free_callback(void *data)
 	*/
 	WRITE_ONCE(nv_mem_context->is_callback, 1);
 
-	peer_err("pid:%d nv_mem_context:%px page_table:%px dma_mapping:%px VA:%llx-%llx npages:%lu\n",
+	peer_dbg("pid:%d nv_mem_context:%px page_table:%px dma_mapping:%px VA:%llx-%llx npages:%lu\n",
 		 pid_n, nv_mem_context, page_table, dma_mapping, 
 		 nv_mem_context->page_virt_start, nv_mem_context->page_virt_end,
 		 nv_mem_context->npages);
@@ -321,7 +341,7 @@ static void nv_get_p2p_free_callback(void *data)
 	}
 out:
 	peer_dbg("before unlock\n");
-	spin_unlock_irqrestore(&ctx_list.lock, flags);	
+	ctxlist_unlock();	
 	module_put(THIS_MODULE);
 	peer_dbg("invalidation completed\n");
 	return;
@@ -406,9 +426,8 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 	struct nv_mem_context *nv_mem_context =
 		(struct nv_mem_context *) context;
 	struct nvidia_p2p_page_table *page_table;
-	unsigned long flags;
 
-	spin_lock_irqsave(&ctx_list.lock, flags);
+	ctxlist_lock();
 	if (!__ctxlist_is_tracked(nv_mem_context)) {
 		peer_err("error, invalid ctx %px\n", nv_mem_context);
 		ret = -EINVAL;
@@ -508,7 +527,7 @@ static int nv_dma_map(struct sg_table *sg_head, void *context,
 
 	*nmap = nv_mem_context->npages;
  out:
-	spin_unlock_irqrestore(&ctx_list.lock, flags);
+	ctxlist_unlock();
 	return ret;
 }
 
@@ -518,7 +537,6 @@ static int nv_dma_unmap(struct sg_table *sg_head, void *context,
 	int ret = 0;
 	struct nv_mem_context *nv_mem_context =
 		(struct nv_mem_context *)context;
-	unsigned long flags;
 	
 	if (!nv_mem_context) {
 		peer_err("nv_dma_unmap -- invalid nv_mem_context\n");
@@ -532,7 +550,7 @@ static int nv_dma_unmap(struct sg_table *sg_head, void *context,
 	}
 
 	peer_dbg("before lock\n");
-	spin_lock_irqsave(&ctx_list.lock, flags);
+	ctxlist_lock();
 	peer_dbg("before is tracked\n");
 	if (!__ctxlist_is_tracked(nv_mem_context)) {
 		peer_err("error, context %px not tracked, ignoring it\n", nv_mem_context);
@@ -558,7 +576,7 @@ static int nv_dma_unmap(struct sg_table *sg_head, void *context,
 #endif
 
 out:
-	spin_unlock_irqrestore(&ctx_list.lock, flags);
+	ctxlist_unlock();
 	return ret;
 }
 
@@ -568,7 +586,7 @@ static void nv_mem_put_pages(struct sg_table *sg_head, void *context)
 	int ret = 0;
 	struct nv_mem_context *nv_mem_context =
 		(struct nv_mem_context *) context;
-	unsigned long flags;
+	
 
 	if (!nv_mem_context) {
 		peer_err("invalid context %px\n", nv_mem_context);
@@ -582,7 +600,7 @@ static void nv_mem_put_pages(struct sg_table *sg_head, void *context)
 	}
 
 	peer_dbg("before lock\n");
-	spin_lock_irqsave(&ctx_list.lock, flags);
+	ctxlist_lock();
 	peer_dbg("before is tracked\n");
 	if (!__ctxlist_is_tracked(nv_mem_context)) {
 		peer_err("error, context %px not tracked, ignoring it\n", nv_mem_context);
@@ -611,7 +629,7 @@ out:
 		nv_mem_context->sg_allocated = 0;
 	}
 
-	spin_unlock_irqrestore(&ctx_list.lock, flags);
+	ctxlist_unlock();
 	return;
 }
 
@@ -653,14 +671,14 @@ static int nv_mem_get_pages(unsigned long addr,
 {
 	int ret = 0;
 	struct nv_mem_context *nv_mem_context = (struct nv_mem_context *)client_context;
-	unsigned long flags;
+	
 
 	if (!nv_mem_context) {
 		peer_err("invalid context\n");
 		return -EINVAL;
 	}
 
-	spin_lock_irqsave(&ctx_list.lock, flags);
+	ctxlist_lock();
 	if (!__ctxlist_is_tracked(nv_mem_context)) {
 		peer_err("error, context %px not tracked, ignoring it\n", nv_mem_context);
 		ret = -EINVAL;
@@ -684,7 +702,7 @@ static int nv_mem_get_pages(unsigned long addr,
 	    Extra handling was delayed to be done under nv_dma_map.
 	 */
  out:
-	spin_unlock_irqrestore(&ctx_list.lock, flags);
+	ctxlist_unlock();
 	return ret;
 }
 
