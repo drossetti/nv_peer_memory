@@ -616,6 +616,12 @@ static int nv_dma_unmap(struct sg_table *sg_head, void *context,
 		return -EINVAL;		
 	}
 
+	// unprotected access to the context, we would need a recursive lock otherwise
+	if (READ_ONCE(nv_mem_context->is_callback)) {
+		// do nothing
+		return 0;
+	}
+
 	spin_lock_irqsave(&ctx_list.lock, flags);
 	if (!__ctxlist_is_tracked(nv_mem_context)) {
 		peer_err("error, context %px not tracked, ignoring it\n", nv_mem_context);
@@ -625,12 +631,6 @@ static int nv_dma_unmap(struct sg_table *sg_head, void *context,
 
 	peer_dbg("nv_mem_context:%px page_table:%px dma_mapping:%px is_callback:%d\n", nv_mem_context, nv_mem_context->page_table, nv_mem_context->dma_mapping, READ_ONCE(nv_mem_context->is_callback));
 	
-	if (READ_ONCE(nv_mem_context->is_callback)) {
-		// do nothing
-		ret = 0;
-		goto out;
-	}
-
 	if (!nv_mem_context->sg_allocated) {
 		peer_err("error, sg is not allocated\n");
 		ret = -EINVAL;
@@ -663,22 +663,25 @@ static void nv_mem_put_pages(struct sg_table *sg_head, void *context)
 		return;
 	}
 
+	// unprotected access to the context, we would need a recursive lock otherwise
+	if (READ_ONCE(nv_mem_context->is_callback)) {
+		// do nothing
+		return;
+	}
+
 	spin_lock_irqsave(&ctx_list.lock, flags);
 	if (!__ctxlist_is_tracked(nv_mem_context)) {
 		peer_err("error, context %px not tracked, ignoring it\n", nv_mem_context);
 		goto out;
 	}
 
-	peer_dbg("nv_mem_context:%px page_table:%px is_callback:%d\n", nv_mem_context, nv_mem_context->page_table, READ_ONCE(nv_mem_context->is_callback));
+	peer_dbg("nv_mem_context:%px page_table:%px dma_mapping:%px is_callback:%d\n", nv_mem_context, nv_mem_context->page_table, nv_mem_context->dma_mapping, READ_ONCE(nv_mem_context->is_callback));
 	
 	// freeing table even in the invalidation callback case
 	if (nv_mem_context->sg_allocated) {
 		sg_free_table(sg_head);
 		nv_mem_context->sg_allocated = 0;
 	}
-
-	if (READ_ONCE(nv_mem_context->is_callback))
-		goto out;
 
 	ret = nv_put_pages(0, 0, nv_mem_context->page_virt_start,
 				   nv_mem_context->page_table);
