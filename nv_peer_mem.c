@@ -124,6 +124,7 @@ struct nv_mem_context {
 	unsigned long npages;
 	unsigned long page_size;
 	int is_callback;
+	int has_pending_release;
 	int sg_allocated;
 	struct list_head node;
 	uint64_t guard1;
@@ -206,7 +207,9 @@ static int ctxlist_del(struct nv_mem_context *ctx)
 {
 	int rc = 0;
 	unsigned long flags;
+	peer_dbg("before lock\n");
 	spin_lock_irqsave(&ctx_list.lock, flags);
+	peer_dbg("after lock\n");
 	rc = __ctxlist_del(ctx);
 	spin_unlock_irqrestore(&ctx_list.lock, flags);
 	return rc;
@@ -239,7 +242,8 @@ static void nv_get_p2p_free_callback(void *data)
 	struct nvidia_p2p_dma_mapping *dma_mapping = NULL;
 #endif
 	unsigned long flags;
-	
+	int pid_n = pid_nr(task_pid(current));
+	peer_dbg("before module get\n");
 	__module_get(THIS_MODULE);
 	spin_lock_irqsave(&ctx_list.lock, flags);
 
@@ -276,16 +280,19 @@ static void nv_get_p2p_free_callback(void *data)
 	*/
 	WRITE_ONCE(nv_mem_context->is_callback, 1);
 
-	peer_err("nv_mem_context:%px page_table:%px dma_mapping:%px VA:%llx-%llx npages:%lu\n",
-		 nv_mem_context, page_table, dma_mapping, nv_mem_context->page_virt_start, nv_mem_context->page_virt_end, nv_mem_context->npages);
+	peer_err("pid:%d nv_mem_context:%px page_table:%px dma_mapping:%px VA:%llx-%llx npages:%lu\n",
+		 pid_n, nv_mem_context, page_table, dma_mapping, 
+		 nv_mem_context->page_virt_start, nv_mem_context->page_virt_end,
+		 nv_mem_context->npages);
 
-	// holding ctx_list lock
+	// after this call, the whole context will have been deallocated most probably
 	(*mem_invalidate_callback) (reg_handle, (uint64_t)nv_mem_context->core_context);
 
 #if NV_DMA_MAPPING
 	if (!dma_mapping) {
 		peer_err("invalid dma_mapping\n");
 	} else {
+		peer_dbg("calling nv_free_dma_mapping\n");
 		ret = nvidia_p2p_free_dma_mapping(dma_mapping);
 		if (ret)
 			peer_err("nv_get_p2p_free_callback -- error %d while calling nvidia_p2p_free_page_table()\n", ret);
@@ -295,17 +302,29 @@ static void nv_get_p2p_free_callback(void *data)
 	if (!page_table) {
 		peer_err("invalid page_table\n");
 	} else {
+		peer_dbg("calling nv_free_page_table\n");
 		ret = nvidia_p2p_free_page_table(page_table);
 		if (ret)
 			peer_err("nv_get_p2p_free_callback -- error %d while calling nvidia_p2p_free_page_table()\n", ret);
 		nv_mem_context->page_table = NULL;
 	}
 
+	peer_dbg("before has pending\n");
+	if (READ_ONCE(nv_mem_context->has_pending_release)) {
+		peer_dbg("before list del\n");
+		if (__ctxlist_del(nv_mem_context)) {
+			peer_err("error, while dequeuing nv_mem_context:%px\n", nv_mem_context);
+		}
+		peer_dbg("before kfree\n");
+		memset(nv_mem_context, 0, sizeof(nv_mem_context));
+		kfree(nv_mem_context);
+	}
 out:
+	peer_dbg("before unlock\n");
 	spin_unlock_irqrestore(&ctx_list.lock, flags);	
 	module_put(THIS_MODULE);
+	peer_dbg("invalidation completed\n");
 	return;
-
 }
 
 /* At that function we don't call IB core - no ticket exists */
@@ -313,13 +332,13 @@ static void nv_mem_dummy_callback(void *data)
 {
 	struct nv_mem_context *nv_mem_context = (struct nv_mem_context *)data;
 	int ret = 0;
-
+	peer_dbg("before module get\n");
 	__module_get(THIS_MODULE);
 
 	ret = nvidia_p2p_free_page_table(nv_mem_context->page_table);
 	if (ret)
 		peer_err("nv_mem_dummy_callback --  error %d while calling nvidia_p2p_free_page_table()\n", ret);
-
+	peer_dbg("before module put\n");
 	module_put(THIS_MODULE);
 	return;
 }
@@ -367,6 +386,7 @@ static int nv_mem_acquire(unsigned long addr, size_t size, void *peer_mem_privat
 	}
 
 	peer_dbg("nv_mem_context:%px page_table:%px dma_mapping:%px is_callback:%d\n", nv_mem_context, nv_mem_context->page_table, nv_mem_context->dma_mapping, READ_ONCE(nv_mem_context->is_callback));
+	peer_dbg("before module get\n");
 	__module_get(THIS_MODULE);
 	return 1;
 
@@ -507,11 +527,13 @@ static int nv_dma_unmap(struct sg_table *sg_head, void *context,
 
 	// unprotected access to the context, we would need a recursive lock otherwise
 	if (READ_ONCE(nv_mem_context->is_callback)) {
-		// do nothing
+		peer_dbg("early exit in a callback\n");
 		return 0;
 	}
 
+	peer_dbg("before lock\n");
 	spin_lock_irqsave(&ctx_list.lock, flags);
+	peer_dbg("before is tracked\n");
 	if (!__ctxlist_is_tracked(nv_mem_context)) {
 		peer_err("error, context %px not tracked, ignoring it\n", nv_mem_context);
 		ret = -EAGAIN;
@@ -555,11 +577,13 @@ static void nv_mem_put_pages(struct sg_table *sg_head, void *context)
 
 	// unprotected access to the context, we would need a recursive lock otherwise
 	if (READ_ONCE(nv_mem_context->is_callback)) {
-		// do nothing
+		peer_dbg("early exit in a callback\n");
 		return;
 	}
 
+	peer_dbg("before lock\n");
 	spin_lock_irqsave(&ctx_list.lock, flags);
+	peer_dbg("before is tracked\n");
 	if (!__ctxlist_is_tracked(nv_mem_context)) {
 		peer_err("error, context %px not tracked, ignoring it\n", nv_mem_context);
 		goto out;
@@ -595,9 +619,24 @@ static void nv_mem_release(void *context)
 {
 	struct nv_mem_context *nv_mem_context =
 		(struct nv_mem_context *) context;
-	peer_dbg("nv_mem_context:%px page_table:%px dma_mapping:%px is_callback:%d\n", nv_mem_context, nv_mem_context->page_table, nv_mem_context->dma_mapping, READ_ONCE(nv_mem_context->is_callback));
-	ctxlist_del(nv_mem_context);
+	int pid_n = pid_nr(task_pid(current));
+	peer_dbg("pid:%d nv_mem_context:%px page_table:%px dma_mapping:%px is_callback:%d has_pending_release:%d\n",
+		 pid_n, nv_mem_context, nv_mem_context->page_table, nv_mem_context->dma_mapping,
+		 READ_ONCE(nv_mem_context->is_callback), READ_ONCE(nv_mem_context->has_pending_release));
+
+	// unprotected access to the context, we would need a recursive lock otherwise
+	if (READ_ONCE(nv_mem_context->is_callback)) {
+		peer_dbg("early exit in a callback, release pending\n");
+		WRITE_ONCE(nv_mem_context->has_pending_release, 1);
+		goto out;
+	}
+	if (ctxlist_del(nv_mem_context)) {
+		peer_err("error, while dequeuing nv_mem_context:%px\n", nv_mem_context);
+	}
+	peer_dbg("before kfree\n");
+	// note, small race window, as not atomically removing context from tracking list AND freeing it
 	kfree(nv_mem_context);
+out:
 	module_put(THIS_MODULE);
 	return;
 }
@@ -693,6 +732,7 @@ static void __exit nv_mem_client_cleanup(void)
 	ib_unregister_peer_memory_client(reg_handle);
 	if (!ctxlist_is_empty()) {
 		peer_err("error, ctx list not empty\n");
+		// free ctx here...
 	}
 }
 
