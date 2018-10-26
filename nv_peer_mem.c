@@ -46,20 +46,20 @@
 #define DRV_VERSION	"1.1"
 #define DRV_RELDATE	__DATE__
 
-#define peer_err(FMT, ARGS...)  printk(KERN_ERR   DRV_NAME " %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS)
+#define peer_err(FMT, ARGS...)  printk(KERN_ERR   DRV_NAME " ERR %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS)
 
 static int enable_info = 0;
 #define peer_info(FMT, ARGS...)                                         \
         do {                                                            \
                 if (enable_info)                                        \
-                        printk(KERN_INFO  DRV_NAME " %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS); \
+                        printk(KERN_ERR  DRV_NAME " INFO %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS); \
         } while(0)
 
 static int enable_dbg = 0;
 #define peer_dbg(FMT, ARGS...)                                          \
         do {                                                            \
-                if (enable_dbg && printk_ratelimit())                   \
-                        printk(KERN_DEBUG DRV_NAME " %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS); \
+                if (enable_dbg /*&& printk_ratelimit()*/)		\
+                        printk(KERN_ERR DRV_NAME " DBG %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS); \
         } while(0)
 
 #define MAX_SG_DUMP 0
