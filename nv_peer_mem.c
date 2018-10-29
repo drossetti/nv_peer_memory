@@ -271,9 +271,9 @@ static void nv_get_p2p_free_callback(void *data)
 #endif
 	
 	int pid_n = pid_nr(task_pid(current));
+
 	peer_dbg("before module get\n");
 	__module_get(THIS_MODULE);
-	ctxlist_lock();
 
 	if (!nv_mem_context) {
 		peer_err("invalid nv_mem_context\n");
@@ -672,14 +672,12 @@ static int nv_mem_get_pages(unsigned long addr,
 	int ret = 0;
 	struct nv_mem_context *nv_mem_context = (struct nv_mem_context *)client_context;
 	
-
 	if (!nv_mem_context) {
 		peer_err("invalid context\n");
 		return -EINVAL;
 	}
 
-	ctxlist_lock();
-	if (!__ctxlist_is_tracked(nv_mem_context)) {
+	if (!ctxlist_is_tracked(nv_mem_context)) {
 		peer_err("error, context %px not tracked, ignoring it\n", nv_mem_context);
 		ret = -EINVAL;
 		goto out;
@@ -702,7 +700,6 @@ static int nv_mem_get_pages(unsigned long addr,
 	    Extra handling was delayed to be done under nv_dma_map.
 	 */
  out:
-	ctxlist_unlock();
 	return ret;
 }
 
