@@ -47,7 +47,7 @@
 
 
 #define DRV_NAME	"nv_mem"
-#define DRV_VERSION	"1.0-8"
+#define DRV_VERSION	"1.0-8war2"
 #define DRV_RELDATE	__DATE__
 
 #define peer_err(FMT, ARGS...)  printk(KERN_ERR   DRV_NAME "ERR %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS)
