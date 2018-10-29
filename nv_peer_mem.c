@@ -191,7 +191,6 @@ static int ctxlist_is_tracked(struct nv_mem_context *ctx)
 static int __ctxlist_add(struct nv_mem_context *ctx)
 {
 	int rc = 0;
-	peer_dbg("ctx:%px\n", ctx);	
 	if (!ctx) {
 		peer_err("invalid NULL ctx\n");
 		rc = EINVAL;
@@ -202,6 +201,7 @@ static int __ctxlist_add(struct nv_mem_context *ctx)
 		rc = EAGAIN;
 		goto out;
 	}
+	peer_dbg("tracking ctx:%px\n", ctx);
 	list_add_tail(&ctx->node, &ctx_list.head);
  out:
 	return rc;
@@ -220,12 +220,17 @@ static int ctxlist_add(struct nv_mem_context *ctx)
 static int __ctxlist_del(struct nv_mem_context *ctx)
 {
 	int rc = 0;
-	peer_dbg("ctx:%px\n", ctx);
-	if (!__ctxlist_is_tracked(ctx)) {		
-		peer_err("ouch, ctx=%px is not tracked, while trying to remove from list, nothing to do\n", ctx);
+	if (!ctx) {
+		peer_err("invalid NULL ctx\n");
 		rc = EINVAL;
 		goto out;
 	}
+	if (!__ctxlist_is_tracked(ctx)) {		
+		peer_err("ouch, ctx=%px is not tracked, while trying to remove from list, nothing to do\n", ctx);
+		rc = EAGAIN;
+		goto out;
+	}
+	peer_dbg("untracking ctx:%px\n", ctx);
 	list_del(&ctx->node);
  out:
 	return rc;
@@ -235,9 +240,7 @@ static int ctxlist_del(struct nv_mem_context *ctx)
 {
 	int rc = 0;
 	
-	peer_dbg("before lock\n");
 	ctxlist_lock();
-	peer_dbg("after lock\n");
 	rc = __ctxlist_del(ctx);
 	ctxlist_unlock();
 	return rc;
@@ -339,18 +342,15 @@ static void nv_get_p2p_free_callback(void *data)
 		nv_mem_context->page_table = NULL;
 	}
 
-	peer_dbg("before has pending\n");
 	if (READ_ONCE(nv_mem_context->has_pending_release)) {
-		peer_dbg("before list del\n");
+		peer_dbg("ctx:%px has pending release flag set\n", nv_mem_context);
 		if (ctxlist_del(nv_mem_context)) {
 			peer_err("error, while dequeuing nv_mem_context:%px\n", nv_mem_context);
 		}
-		peer_dbg("before kfree\n");
 		memset(nv_mem_context, 0, sizeof(*nv_mem_context));
 		kfree(nv_mem_context);
 	}
 out:
-	peer_dbg("before unlock\n");
 	module_put(THIS_MODULE);
 	peer_dbg("invalidation completed\n");
 	return;
