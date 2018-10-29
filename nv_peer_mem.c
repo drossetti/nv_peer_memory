@@ -329,7 +329,6 @@ static void nv_get_p2p_free_callback(void *data)
 		mutex_unlock(&api_lock);
 		if (ret)
 			peer_err("nv_get_p2p_free_callback -- error %d while calling nvidia_p2p_free_page_table()\n", ret);
-		nv_mem_context->dma_mapping = NULL;
 	}
 #endif
 	if (!page_table) {
@@ -339,7 +338,6 @@ static void nv_get_p2p_free_callback(void *data)
 		ret = nvidia_p2p_free_page_table(page_table);
 		if (ret)
 			peer_err("nv_get_p2p_free_callback -- error %d while calling nvidia_p2p_free_page_table()\n", ret);
-		nv_mem_context->page_table = NULL;
 	}
 
 	if (READ_ONCE(nv_mem_context->has_pending_release)) {
