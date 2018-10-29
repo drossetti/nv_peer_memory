@@ -713,6 +713,8 @@ static unsigned long nv_mem_get_page_size(void *context)
 
 
 static struct peer_memory_client nv_mem_client = {
+	.name           = DRV_NAME,
+	.version        = DRV_VERSION,
 	.acquire		= nv_mem_acquire,
 	.get_pages	= nv_mem_get_pages,
 	.dma_map	= nv_dma_map,
