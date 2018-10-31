@@ -40,6 +40,7 @@
 #include <linux/hugetlb.h>
 #include <linux/atomic.h>
 #include <linux/pci.h>
+#include <linux/delay.h>
 
 
 #include "nv-p2p.h"
@@ -124,6 +125,7 @@ invalidate_peer_memory mem_invalidate_callback;
 static void *reg_handle;
 
 struct nv_mem_context {
+#define GUARD_MAGIC 0xd4d0d4d0a5a5a5a5ULL
 	uint64_t guard0;
 	struct nvidia_p2p_page_table *page_table;
 #if NV_DMA_MAPPING
@@ -146,6 +148,38 @@ struct nv_mem_context {
 	uint64_t guard1;
 };
 
+
+static void ctx_dump(struct nv_mem_context *ctx)
+{
+	peer_err("ctx:%px"
+		 " guard0:%llx"
+		 " page_table:%px"
+#if NV_DMA_MAPPING
+		 " dma_mapping:%px"
+#endif
+		 " core_context:%llx"
+		 " page_virt_start:%llx"
+		 " page_virt_end:%llx"
+		 " npages:%lu"
+		 " is_callback:%d"
+		 " has_pending_release:%d"
+		 " sg_allocated:%d"
+		 " guard1:%llx",
+		 ctx,
+		 ctx->guard0,
+		 ctx->page_table,
+#if NV_DMA_MAPPING
+		 ctx->dma_mapping,
+#endif
+		 (u64)ctx->core_context,
+		 ctx->page_virt_start,
+		 ctx->page_virt_end,
+		 ctx->npages,
+		 ctx->is_callback,
+		 ctx->has_pending_release,
+		 ctx->sg_allocated,
+		 ctx->guard1);
+}
 
 #if 0
 typedef spinlock_t ctxlist_lock_t;
@@ -181,6 +215,10 @@ static int __ctxlist_is_tracked(struct nv_mem_context *ctx)
 		struct nv_mem_context *cur_ctx = list_entry(cur, struct nv_mem_context, node);
 		if (cur_ctx == ctx) {
 			rc = 1;
+			if ((ctx->guard0 != GUARD_MAGIC) || (ctx->guard1 != GUARD_MAGIC)) {
+				peer_err("detected corrupted context, invalid guard words\n");
+				ctx_dump(ctx);
+			}
 			break;
 		}
 	}
@@ -210,6 +248,8 @@ static int __ctxlist_add(struct nv_mem_context *ctx)
 		rc = EAGAIN;
 		goto out;
 	}
+	ctx->guard0 = GUARD_MAGIC;
+	ctx->guard1 = GUARD_MAGIC;
 	list_add_tail(&ctx->node, &ctx_list.head);
  out:
 	return rc;
@@ -234,6 +274,8 @@ static int __ctxlist_del(struct nv_mem_context *ctx)
 		rc = EINVAL;
 		goto out;
 	}
+	ctx->guard0 = 0;
+	ctx->guard1 = 0;
 	list_del(&ctx->node);
  out:
 	return rc;
@@ -290,6 +332,9 @@ static void nv_get_p2p_free_callback(void *data)
 
 	if (!__ctxlist_is_tracked(nv_mem_context)) {
 		peer_err("error, context %px not tracked, ignoring it\n", nv_mem_context);
+		// this matches the one in nv_mem_release
+		peer_err("before module put 1\n");
+		module_put(THIS_MODULE);
 		goto out;
 	}
 
@@ -357,7 +402,8 @@ static void nv_get_p2p_free_callback(void *data)
 	}
 out:
 	peer_dbg("before unlock\n");
-	ctxlist_unlock();	
+	ctxlist_unlock();
+	peer_dbg("before module put\n");
 	module_put(THIS_MODULE);
 	peer_dbg("invalidation completed\n");
 	return;
