@@ -639,36 +639,54 @@ static void nv_mem_put_pages(struct sg_table *sg_head, void *context)
 	int ret = 0;
 	struct nv_mem_context *nv_mem_context =
 		(struct nv_mem_context *) context;
-	
-
+	struct nvidia_p2p_page_table *page_table = NULL;
+	int is_callback = 0;
+	u64 page_virt_start = 0;
+	int sg_allocated = 0;
 	if (!nv_mem_context) {
 		peer_err("invalid context %px\n", nv_mem_context);
 		return;
 	}
 
 	peer_dbg("before is tracked\n");
-	if (!ctxlist_is_tracked(nv_mem_context)) {
+	ctxlist_lock();
+	if (!__ctxlist_is_tracked(nv_mem_context)) {
 		peer_err("error, context %px not tracked, ignoring it\n", nv_mem_context);
+		ret = EINVAL;
+	} else {
+		page_table = nv_mem_context->page_table;
+		//nv_mem_context->page_table = NULL;
+		page_virt_start = nv_mem_context->page_virt_start;
+		is_callback = nv_mem_context->is_callback;
+		sg_allocated = nv_mem_context->sg_allocated;
+		nv_mem_context->sg_allocated = 0;
+	}
+	ctxlist_unlock();
+	if (ret) {
 		return;
 	}
-
-	if (READ_ONCE(nv_mem_context->is_callback)) {
+	if (is_callback) {
 		peer_dbg("early exit in a callback\n");
 		return;
 	}
-	
-	peer_dbg("nv_mem_context:%px page_table:%px dma_mapping:%px is_callback:%d\n", nv_mem_context, nv_mem_context->page_table, nv_mem_context->dma_mapping, READ_ONCE(nv_mem_context->is_callback));
-
-	ret = nvidia_p2p_put_pages(0, 0, nv_mem_context->page_virt_start,
-				   nv_mem_context->page_table);
-	if (ret < 0) {
-		peer_dbg("error %d while calling nvidia_p2p_put_pages, nv_mem_context:%px page_table=%px\n",
-			 ret, nv_mem_context, nv_mem_context->page_table);
+	if (!page_table) {
+		peer_err("error, invalid page_table\n");
+		return;
 	}
+	
+	peer_dbg("nv_mem_context:%px page_table:%px is_callback:%d sg_allocated:%d\n", nv_mem_context, page_table, is_callback, sg_allocated);
 
-	if (READ_ONCE(nv_mem_context->sg_allocated)) {
+	ret = nvidia_p2p_put_pages(0, 0, page_virt_start, page_table);
+	if (ret < 0) {
+		peer_dbg("error %d from nvidia_p2p_put_pages nv_mem_context:%px page_table=%px, possibly leaking kernel resources\n",
+			 ret, nv_mem_context, page_table);
+		// this would be a desperate attempt because:
+		// - context could have been deallocated
+		// - free_callback could have dereferenced ctx->page_table already
+		// WRITE_ONCE(nv_mem_context->page_table, NULL);
+	}
+	if (sg_allocated) {
 		sg_free_table(sg_head);
-		WRITE_ONCE(nv_mem_context->sg_allocated, 0);
 	}
 }
 
