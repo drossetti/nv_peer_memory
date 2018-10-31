@@ -333,22 +333,21 @@ static void nv_get_p2p_free_callback(void *data)
 		goto out;
 	}
 
-	if (!nv_mem_context->page_table) {
-		peer_err("invalid page_table\n");
-		goto out;
-	}
-
 	/* Save page_table locally to prevent it being freed as part of nv_mem_release
 	    in case it's called internally by that callback.
 	*/
 	page_table = nv_mem_context->page_table;
+	if (!page_table) {
+		peer_err("invalid page_table\n");
+		goto out;
+	}
 
 #if NV_DMA_MAPPING
-	if (!nv_mem_context->dma_mapping) {
+	dma_mapping = nv_mem_context->dma_mapping;
+	if (!dma_mapping) {
 		peer_err("nv_get_p2p_free_callback -- invalid dma_mapping\n");
 		goto out;
 	}
-	dma_mapping = nv_mem_context->dma_mapping;
 #endif
 
 	/* For now don't set nv_mem_context->page_table to NULL, 
@@ -370,7 +369,10 @@ static void nv_get_p2p_free_callback(void *data)
 	} else {
 		peer_dbg("calling nv_free_dma_mapping\n");
 		mutex_lock(&api_lock);
-		ret = nvidia_p2p_free_dma_mapping(dma_mapping);
+		if (dma_mapping == nv_mem_context->dma_mapping) {
+			ret = nvidia_p2p_free_dma_mapping(dma_mapping);
+			nv_mem_context->dma_mapping = NULL;
+		}
 		mutex_unlock(&api_lock);
 		if (ret)
 			peer_err("nv_get_p2p_free_callback -- error %d while calling nvidia_p2p_free_page_table()\n", ret);
@@ -619,9 +621,11 @@ static int nv_dma_unmap(struct sg_table *sg_head, void *context,
 		struct pci_dev *pdev = to_pci_dev(dma_device);
 		//peer_dbg("freeing dma_mapping %px\n", nv_mem_context->dma_mapping);
 		mutex_lock(&api_lock);
-		nvidia_p2p_dma_unmap_pages(pdev, nv_mem_context->page_table, nv_mem_context->dma_mapping);
+		if (nv_mem_context->dma_mapping != NULL) {
+			nvidia_p2p_dma_unmap_pages(pdev, nv_mem_context->page_table, nv_mem_context->dma_mapping);
+			nv_mem_context->dma_mapping = NULL;
+		}
 		mutex_unlock(&api_lock);
-		nv_mem_context->dma_mapping = NULL;
 	}
 #endif
 
