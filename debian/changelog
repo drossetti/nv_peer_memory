@@ -1,3 +1,9 @@
+nvidia-peer-memory (1.0-8~nvidia3) UNRELEASED; urgency=medium
+
+  *  fix potential race, print errors from nvidia_p2p_put_pages
+
+ -- Davide Rossetti <davide.rossetti@gmail.com>  Tue, 31 Oct 2018 15:05:34 -0700
+
 nvidia-peer-memory (1.0-8~nvidia2) UNRELEASED; urgency=medium
 
   *  fix lock inversion problem: reduce scope of ctx list lock
