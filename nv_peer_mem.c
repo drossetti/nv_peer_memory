@@ -394,8 +394,6 @@ static void nv_get_p2p_free_callback(void *data)
 		kfree(nv_mem_context);
 	}
 out:
-	peer_dbg("before unlock\n");
-	ctxlist_unlock();
 	peer_dbg("before module put\n");
 	module_put(THIS_MODULE);
 	peer_dbg("invalidation completed\n");
