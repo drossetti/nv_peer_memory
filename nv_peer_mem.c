@@ -48,7 +48,7 @@
 
 
 #define DRV_NAME	"nv_mem"
-#define DRV_VERSION	"1.0-8~nvidia2"
+#define DRV_VERSION	"1.0-8~nvidia3"
 #define DRV_RELDATE	__DATE__
 
 #define peer_err(FMT, ARGS...)  printk(KERN_ERR   DRV_NAME " ERR %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS)
@@ -649,7 +649,7 @@ static void nv_mem_put_pages(struct sg_table *sg_head, void *context)
 	peer_dbg("before is tracked\n");
 	if (!ctxlist_is_tracked(nv_mem_context)) {
 		peer_err("error, context %px not tracked, ignoring it\n", nv_mem_context);
-		goto out;
+		return;
 	}
 
 	if (READ_ONCE(nv_mem_context->is_callback)) {
@@ -661,24 +661,15 @@ static void nv_mem_put_pages(struct sg_table *sg_head, void *context)
 
 	ret = nvidia_p2p_put_pages(0, 0, nv_mem_context->page_virt_start,
 				   nv_mem_context->page_table);
-
-#ifdef _DEBUG_ONLY_
-	/* Here we expect an error in real life cases that should be ignored - not printed.
-	  * (e.g. concurrent callback with that call)
-	*/
 	if (ret < 0) {
-		printk(KERN_ERR "error %d while calling nvidia_p2p_put_pages, page_table=%p \n",
-			ret,  nv_mem_context->page_table);
+		peer_dbg("error %d while calling nvidia_p2p_put_pages, nv_mem_context:%px page_table=%px\n",
+			 ret, nv_mem_context, nv_mem_context->page_table);
 	}
-#endif
 
-
-out:
-	if (nv_mem_context->sg_allocated) {
+	if (READ_ONCE(nv_mem_context->sg_allocated)) {
 		sg_free_table(sg_head);
-		nv_mem_context->sg_allocated = 0;
+		WRITE_ONCE(nv_mem_context->sg_allocated, 0);
 	}
-	return;
 }
 
 static void nv_mem_release(void *context)
@@ -698,6 +689,9 @@ static void nv_mem_release(void *context)
 	}
 	if (ctxlist_del(nv_mem_context)) {
 		peer_err("error, while dequeuing nv_mem_context:%px\n", nv_mem_context);
+	}
+	if (READ_ONCE(nv_mem_context->sg_allocated)) {
+		peer_err("error, leaking sg table\n");
 	}
 	peer_dbg("before kfree\n");
 	// note, small race window, as not atomically removing context from tracking list AND freeing it
