@@ -48,7 +48,7 @@
 
 
 #define DRV_NAME	"nv_mem"
-#define DRV_VERSION	"1.0-8~nvidia3"
+#define DRV_VERSION	"1.0-8~nvidia4"
 #define DRV_RELDATE	__DATE__
 
 #define peer_err(FMT, ARGS...)  printk(KERN_ERR   DRV_NAME " ERR %s:%d " FMT, __FUNCTION__, __LINE__, ## ARGS)
@@ -324,37 +324,30 @@ static void nv_get_p2p_free_callback(void *data)
 		peer_err("invalid nv_mem_context\n");
 		goto out;
 	}
-
-	if (!ctxlist_is_tracked(nv_mem_context)) {
+	ctxlist_lock();
+	if (!__ctxlist_is_tracked(nv_mem_context)) {
 		peer_err("error, context %px not tracked, ignoring it\n", nv_mem_context);
 		// this matches the one in nv_mem_release
+		ret = -EINVAL;
+	} else {
+		/* Save page_table locally to prevent it being freed as part of nv_mem_release
+		   in case it's called internally by that callback.
+		*/
+		page_table = nv_mem_context->page_table;
+#if NV_DMA_MAPPING
+		dma_mapping = nv_mem_context->dma_mapping;
+#endif
+		/* For now don't set nv_mem_context->page_table to NULL, 
+		 * confirmed by NVIDIA that inflight put_pages with valid pointer will fail gracefully.
+		 */
+		WRITE_ONCE(nv_mem_context->is_callback, 1);
+	}
+	if (ret) {
 		peer_err("before module put 1\n");
 		module_put(THIS_MODULE);
-		goto out;
 	}
-
-	/* Save page_table locally to prevent it being freed as part of nv_mem_release
-	    in case it's called internally by that callback.
-	*/
-	page_table = nv_mem_context->page_table;
-	if (!page_table) {
-		peer_err("invalid page_table\n");
-		goto out;
-	}
-
-#if NV_DMA_MAPPING
-	dma_mapping = nv_mem_context->dma_mapping;
-	if (!dma_mapping) {
-		peer_err("nv_get_p2p_free_callback -- invalid dma_mapping\n");
-		goto out;
-	}
-#endif
-
-	/* For now don't set nv_mem_context->page_table to NULL, 
-	  * confirmed by NVIDIA that inflight put_pages with valid pointer will fail gracefully.
-	*/
-	WRITE_ONCE(nv_mem_context->is_callback, 1);
-
+	ctxlist_unlock();
+	
 	peer_dbg("pid:%d nv_mem_context:%px page_table:%px dma_mapping:%px VA:%llx-%llx npages:%lu\n",
 		 pid_n, nv_mem_context, page_table, dma_mapping, 
 		 nv_mem_context->page_virt_start, nv_mem_context->page_virt_end,
@@ -387,13 +380,26 @@ static void nv_get_p2p_free_callback(void *data)
 			peer_err("nv_get_p2p_free_callback -- error %d while calling nvidia_p2p_free_page_table()\n", ret);
 	}
 
-	if (READ_ONCE(nv_mem_context->has_pending_release)) {
-		peer_dbg("ctx:%px has pending release flag set\n", nv_mem_context);
-		if (ctxlist_del(nv_mem_context)) {
-			peer_err("error, while dequeuing nv_mem_context:%px\n", nv_mem_context);
+	ctxlist_lock();	
+	if (!__ctxlist_is_tracked(nv_mem_context)) {
+		ctxlist_unlock();
+		ret = -EINVAL;		
+		peer_err("error, context %px not tracked, ignoring it\n", nv_mem_context);
+	} else {
+		struct nv_mem_context *ctx = NULL;
+		if (READ_ONCE(nv_mem_context->has_pending_release)) {
+			peer_dbg("ctx:%px has pending release flag set\n", nv_mem_context);
+			if (__ctxlist_del(nv_mem_context)) {
+				peer_err("error, while dequeuing nv_mem_context:%px\n", nv_mem_context);
+			}
+			ctx = nv_mem_context;
 		}
-		memset(nv_mem_context, 0, sizeof(*nv_mem_context));
-		kfree(nv_mem_context);
+		ctxlist_unlock();
+		if (ctx) {
+			peer_dbg("before memset\n");
+			memset(nv_mem_context, 0, sizeof(*nv_mem_context));
+			kfree(nv_mem_context);
+		}
 	}
 out:
 	peer_dbg("before module put\n");
@@ -673,7 +679,10 @@ static void nv_mem_put_pages(struct sg_table *sg_head, void *context)
 		peer_err("error, invalid page_table\n");
 		return;
 	}
-	
+	if (sg_allocated) {
+		sg_free_table(sg_head);
+	}
+
 	peer_dbg("nv_mem_context:%px page_table:%px is_callback:%d sg_allocated:%d\n", nv_mem_context, page_table, is_callback, sg_allocated);
 
 	ret = nvidia_p2p_put_pages(0, 0, page_virt_start, page_table);
@@ -684,9 +693,11 @@ static void nv_mem_put_pages(struct sg_table *sg_head, void *context)
 		// - context could have been deallocated
 		// - free_callback could have dereferenced ctx->page_table already
 		// WRITE_ONCE(nv_mem_context->page_table, NULL);
-	}
-	if (sg_allocated) {
-		sg_free_table(sg_head);
+		ctxlist_lock();
+		if (__ctxlist_is_tracked(nv_mem_context)) {
+			WRITE_ONCE(nv_mem_context->page_table, page_table);
+		}
+		ctxlist_unlock();
 	}
 }
 
@@ -695,26 +706,50 @@ static void nv_mem_release(void *context)
 	struct nv_mem_context *nv_mem_context =
 		(struct nv_mem_context *) context;
 	int pid_n = pid_nr(task_pid(current));
-	peer_dbg("pid:%d nv_mem_context:%px page_table:%px dma_mapping:%px is_callback:%d has_pending_release:%d\n",
-		 pid_n, nv_mem_context, nv_mem_context->page_table, nv_mem_context->dma_mapping,
-		 READ_ONCE(nv_mem_context->is_callback), READ_ONCE(nv_mem_context->has_pending_release));
+	int is_callback = 0;
+	int sg_allocated = 0;
+	struct nvidia_p2p_page_table *page_table = NULL;
+#if NV_DMA_MAPPING
+	struct nvidia_p2p_dma_mapping *dma_mapping = NULL;
+#endif
+	ctxlist_lock();
+	if (!__ctxlist_is_tracked(nv_mem_context)) {
+		ctxlist_unlock();
+		peer_err("error, context %px not tracked, ignoring it\n", nv_mem_context);
+	} else {
+		is_callback = READ_ONCE(nv_mem_context->is_callback);
+		sg_allocated = READ_ONCE(nv_mem_context->sg_allocated);
+		page_table = READ_ONCE(nv_mem_context->page_table);
+#if NV_DMA_MAPPING
+		dma_mapping = READ_ONCE(nv_mem_context->dma_mapping);
+#endif
 
-	// unprotected access to the context, we would need a recursive lock otherwise
-	if (READ_ONCE(nv_mem_context->is_callback)) {
-		peer_dbg("early exit in a callback, release pending\n");
-		WRITE_ONCE(nv_mem_context->has_pending_release, 1);
-		goto out;
+		peer_dbg("pid:%d nv_mem_context:%px page_table:%px dma_mapping:%px is_callback:%d sg_allocated=%d has_pending_release:%d\n",
+			 pid_n, nv_mem_context, page_table,
+#if NV_DMA_MAPPING
+			 dma_mapping,
+#else
+			 NULL,
+#endif
+			 is_callback, sg_allocated, READ_ONCE(nv_mem_context->has_pending_release));
+		
+		if (is_callback) {
+			WRITE_ONCE(nv_mem_context->has_pending_release, 1);
+			ctxlist_unlock();
+			peer_dbg("early exit in a callback, release pending\n");
+		} else {
+			if (__ctxlist_del(nv_mem_context)) {
+				peer_err("error, while dequeuing nv_mem_context:%px\n", nv_mem_context);
+			}
+			ctxlist_unlock();
+			if (sg_allocated) {
+				peer_err("error, leaking sg table\n");
+			}
+			peer_dbg("before kfree\n");
+			// note, small race window, as not atomically removing context from tracking list AND freeing it
+			kfree(nv_mem_context);
+		}
 	}
-	if (ctxlist_del(nv_mem_context)) {
-		peer_err("error, while dequeuing nv_mem_context:%px\n", nv_mem_context);
-	}
-	if (READ_ONCE(nv_mem_context->sg_allocated)) {
-		peer_err("error, leaking sg table\n");
-	}
-	peer_dbg("before kfree\n");
-	// note, small race window, as not atomically removing context from tracking list AND freeing it
-	kfree(nv_mem_context);
-out:
 	module_put(THIS_MODULE);
 	return;
 }
