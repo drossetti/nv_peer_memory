@@ -382,7 +382,7 @@ static void nv_mem_put_pages(struct sg_table *sg_head, void *context)
                         // possible lack of atomicity / critical section
                         WRITE_ONCE(current->mm->pinned_vm, pinned_vm - nv_mem_context->npages);
                 }
-                printk(KERN_INFO "pinned_vm old:%lu new:%lu\n", pinned_vm, current->mm->pinned_vm);
+                printk(KERN_INFO "pinned_vm old:%lu new:%lu npages=%lu\n", pinned_vm, READ_ONCE(current->mm->pinned_vm), nv_mem_context->npages);
         }
 
 out:
