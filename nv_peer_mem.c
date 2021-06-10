@@ -374,6 +374,11 @@ static void nv_mem_put_pages(struct sg_table *sg_head, void *context)
 	}
 #endif
 
+        // WAR for MLNX BUG #XXXX
+        {
+            if (mm->pinned_vm > nv_mem_context->npages)
+                atomic64_sub(nv_mem_context->npages, &mm->pinned_vm);
+        }
 
 out:
 	if (nv_mem_context->sg_allocated) {
